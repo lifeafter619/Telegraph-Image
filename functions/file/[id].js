@@ -6,6 +6,13 @@ export async function onRequest(context) {
     } = context;
 
     const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+        return new Response(null, {
+            status: 204,
+            headers: crossOriginHeaders(),
+        });
+    }
+
     let fileUrl = 'https://telegra.ph/' + url.pathname + url.search
     if (url.pathname.length > 39) { // Path length > 39 indicates file uploaded via Telegram Bot API
         const formdata = new FormData();
@@ -31,7 +38,7 @@ export async function onRequest(context) {
     });
 
     // If the response is OK, proceed with further checks
-    if (!response.ok) return response;
+    if (!response.ok) return withCrossOriginHeaders(response);
 
     // Log response details
     console.log(response.ok, response.status);
@@ -39,13 +46,13 @@ export async function onRequest(context) {
     // Allow the admin page to directly view the image
     const isAdmin = request.headers.get('Referer')?.includes(`${url.origin}/admin`);
     if (isAdmin) {
-        return response;
+        return withCrossOriginHeaders(response);
     }
 
     // Check if KV storage is available
     if (!env.img_url) {
         console.log("KV storage not available, returning image directly");
-        return response;  // Directly return image response, terminate execution
+        return withCrossOriginHeaders(response);  // Directly return image response, terminate execution
     }
 
     // The following code executes only if KV is available
@@ -77,16 +84,16 @@ export async function onRequest(context) {
 
     // Handle based on ListType and Label
     if (metadata.ListType === "White") {
-        return response;
+        return withCrossOriginHeaders(response);
     } else if (metadata.ListType === "Block" || metadata.Label === "adult") {
         const referer = request.headers.get('Referer');
         const redirectUrl = referer ? "https://static-res.pages.dev/teleimage/img-block-compressed.png" : `${url.origin}/block-img.html`;
-        return Response.redirect(redirectUrl, 302);
+        return redirectWithCrossOriginHeaders(redirectUrl);
     }
 
     // Check if WhiteList_Mode is enabled
     if (env.WhiteList_Mode === "true") {
-        return Response.redirect(`${url.origin}/whitelist-on.html`, 302);
+        return redirectWithCrossOriginHeaders(`${url.origin}/whitelist-on.html`);
     }
 
     // If no metadata or further actions required, moderate content and add to KV if needed
@@ -108,7 +115,7 @@ export async function onRequest(context) {
                     if (moderateData.rating_label === "adult") {
                         console.log("Content marked as adult, saving metadata and redirecting");
                         await env.img_url.put(params.id, "", { metadata });
-                        return Response.redirect(`${url.origin}/block-img.html`, 302);
+                        return redirectWithCrossOriginHeaders(`${url.origin}/block-img.html`);
                     }
                 }
             }
@@ -124,7 +131,33 @@ export async function onRequest(context) {
     await env.img_url.put(params.id, "", { metadata });
 
     // Return file content
-    return response;
+    return withCrossOriginHeaders(response);
+}
+
+function crossOriginHeaders(headers = new Headers()) {
+    headers.set("Access-Control-Allow-Origin", "*");
+    headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    headers.set("Access-Control-Allow-Headers", "Range, Content-Type, Accept, Origin");
+    headers.set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Content-Type, Accept-Ranges, Cache-Control, ETag, Last-Modified");
+    headers.set("Access-Control-Max-Age", "86400");
+    headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+    headers.set("Timing-Allow-Origin", "*");
+    return headers;
+}
+
+function withCrossOriginHeaders(response) {
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: crossOriginHeaders(new Headers(response.headers)),
+    });
+}
+
+function redirectWithCrossOriginHeaders(url, status = 302) {
+    return new Response(null, {
+        status,
+        headers: crossOriginHeaders(new Headers({ Location: url })),
+    });
 }
 
 async function getFilePath(env, file_id) {
